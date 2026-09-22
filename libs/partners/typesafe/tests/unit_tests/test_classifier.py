@@ -460,7 +460,7 @@ def test_api_key_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_base_url_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The classifier reads its API root from `TYPESAFE_BASE_URL`."""
+    """The classifier reads its API root from environment configuration."""
     monkeypatch.setenv("TYPESAFE_BASE_URL", "https://gateway.typesafe.example")
 
     classifier = TypeSafeClassifier(
@@ -468,20 +468,78 @@ def test_base_url_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     assert classifier.base_url == "https://gateway.typesafe.example"
+    assert classifier.api_url == "https://gateway.typesafe.example"
+    assert classifier.api_base == "https://gateway.typesafe.example"
 
 
-def test_explicit_base_url_overrides_environment(
+def test_api_base_environment_variable_precedence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An explicit API root takes precedence over environment configuration."""
-    monkeypatch.setenv("TYPESAFE_BASE_URL", "https://environment.example")
+    """`TYPESAFE_API_BASE` takes precedence over `TYPESAFE_BASE_URL`."""
+    monkeypatch.setenv("TYPESAFE_API_BASE", "https://api-base.example")
+    monkeypatch.setenv("TYPESAFE_BASE_URL", "https://base-url.example")
 
     classifier = TypeSafeClassifier(
         api_key=API_KEY,
-        base_url="https://explicit.example",
     )
 
+    assert classifier.base_url == "https://api-base.example"
+
+
+@pytest.mark.parametrize("param_name", ["base_url", "api_url", "api_base"])
+def test_explicit_base_url_aliases_override_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    param_name: str,
+) -> None:
+    """Explicit URL parameters override environment variables."""
+    monkeypatch.setenv("TYPESAFE_API_BASE", "https://env-api-base.example")
+    monkeypatch.setenv("TYPESAFE_BASE_URL", "https://env-base-url.example")
+
+    kwargs: dict[str, Any] = {
+        param_name: "https://explicit.example",
+        "api_key": API_KEY,
+    }
+    classifier = TypeSafeClassifier(**kwargs)
+
     assert classifier.base_url == "https://explicit.example"
+    assert classifier.api_url == "https://explicit.example"
+    assert classifier.api_base == "https://explicit.example"
+
+
+@pytest.mark.parametrize(
+    ("custom_url", "expected_endpoint"),
+    [
+        ("https://api.custom.ai", "https://api.custom.ai/v1/systemone"),
+        ("https://api.custom.ai/", "https://api.custom.ai/v1/systemone"),
+        ("https://api.custom.ai///", "https://api.custom.ai/v1/systemone"),
+        ("https://api.custom.ai/v1/systemone", "https://api.custom.ai/v1/systemone"),
+        ("https://api.custom.ai/v1/systemone/", "https://api.custom.ai/v1/systemone"),
+    ],
+)
+def test_endpoint_construction_handles_trailing_slashes(
+    custom_url: str,
+    expected_endpoint: str,
+) -> None:
+    """Request URLs format cleanly without double slashes."""
+    recorded_url: str | None = None
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        nonlocal recorded_url
+        recorded_url = str(request.url)
+        return httpx2.Response(200, json=_response_payload())
+
+    client = httpx2.Client(transport=httpx2.MockTransport(handler))
+    classifier = TypeSafeClassifier(
+        api_key=API_KEY,
+        base_url=custom_url,
+        client=client,
+    )
+
+    assert classifier._endpoint == expected_endpoint
+
+    classifier.invoke(_request())
+    assert recorded_url == expected_endpoint
+    client.close()
 
 
 def test_missing_api_key_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
