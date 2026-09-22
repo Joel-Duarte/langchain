@@ -12,6 +12,7 @@ from langchain_core.runnables.config import ensure_config
 from langchain_core.utils import from_env, secret_from_env
 from langsmith.run_helpers import get_current_run_tree
 from pydantic import (
+    AliasChoices,
     ConfigDict,
     Field,
     JsonValue,
@@ -74,7 +75,8 @@ class TypeSafeClassifier(RunnableSerializable[ClassifierRequest, ClassifierRespo
     Args:
         model: TypeSafe model used to answer invocation questions.
         api_key: TypeSafe API key. If omitted, reads `TYPESAFE_API_KEY`.
-        base_url: Root URL for the TypeSafe API.
+        base_url: Root URL for the TypeSafe API. Accepts `api_url` or `api_base`
+            as aliases.
         timeout: Timeout, in seconds, applied to clients created by this class.
         client: Optional synchronous `httpx2.Client` used by `invoke`.
         async_client: Optional asynchronous `httpx2.AsyncClient` used by `ainvoke`.
@@ -186,15 +188,20 @@ class TypeSafeClassifier(RunnableSerializable[ClassifierRequest, ClassifierRespo
     """
 
     base_url: str = Field(
-        default_factory=from_env("TYPESAFE_BASE_URL", default=_DEFAULT_BASE_URL)
+        default_factory=from_env(
+            ["TYPESAFE_API_BASE", "TYPESAFE_BASE_URL"],
+            default=_DEFAULT_BASE_URL,
+        ),
+        validation_alias=AliasChoices("base_url", "api_url", "api_base"),
     )
     """Root URL used for TypeSafe API requests.
 
     Resolution order:
 
-    1. Explicit `base_url` supplied to `TypeSafeClassifier`.
-    2. The `TYPESAFE_BASE_URL` environment variable.
-    3. `https://api.typesafe.ai`.
+    1. Explicit `base_url` (or `api_url`, `api_base`) supplied to `TypeSafeClassifier`.
+    2. The `TYPESAFE_API_BASE` environment variable.
+    3. The `TYPESAFE_BASE_URL` environment variable.
+    4. `https://api.typesafe.ai`.
 
     Requests are sent to `/v1/systemone` beneath this URL. Override it for a compatible
     gateway, test server, or private deployment. URL validation is delegated to
@@ -423,8 +430,21 @@ class TypeSafeClassifier(RunnableSerializable[ClassifierRequest, ClassifierRespo
         return response
 
     @property
+    def api_url(self) -> str:
+        """Alias for `base_url`."""
+        return self.base_url
+
+    @property
+    def api_base(self) -> str:
+        """Alias for `base_url`."""
+        return self.base_url
+
+    @property
     def _endpoint(self) -> str:
-        return f"{self.base_url.rstrip('/')}/v1/systemone"
+        base = self.base_url.rstrip("/")
+        if base.endswith("/v1/systemone"):
+            return base
+        return f"{base}/v1/systemone"
 
     @property
     def _request_headers(self) -> dict[str, str]:
