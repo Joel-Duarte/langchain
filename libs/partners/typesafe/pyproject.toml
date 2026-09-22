@@ -103,5 +103,11 @@ asyncio_mode = "auto"
     "PLR2004", # Magic values are fine in tests
 ]
 "scripts/*.py" = [
-    "INP001", # Not a package
+    "INP001",  # Not a package
+    "T201",    # Print statements are expected in test scripts
+    "S101",    # Assertions are fine in test scripts
+    "PLR2004", # Magic values are fine in test scripts
+    "SLF001",  # Private member access is fine in test scripts
+    "PLR0915", # Statement count is fine in test scripts
+    "RUF100",  # Unused noqa directives in existing scripts
 ]
