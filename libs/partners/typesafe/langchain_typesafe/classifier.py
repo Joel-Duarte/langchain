@@ -69,17 +69,20 @@ class TypeSafeClassifier(RunnableSerializable[ClassifierRequest, ClassifierRespo
     request is sent. Message IDs are omitted, while system, user, assistant, and tool
     roles are preserved.
 
-    The API key is read from `TYPESAFE_API_KEY` when `api_key` is omitted. Explicit
+    The API key is read from `TYPESAFE_API_KEY` when `api_key` is omitted. The model
+    name is read from `TYPESAFE_MODEL` when `model` is omitted. Explicit
     constructor values take precedence over environment configuration.
 
     Args:
-        model: TypeSafe model used to answer invocation questions.
+        model: TypeSafe model used to answer invocation questions. If omitted,
+            reads `TYPESAFE_MODEL` (defaults to "jev-latest").
         api_key: TypeSafe API key. If omitted, reads `TYPESAFE_API_KEY`.
         base_url: Root URL for the TypeSafe API. Accepts `api_url` or `api_base`
             as aliases.
         timeout: Timeout, in seconds, applied to clients created by this class.
         client: Optional synchronous `httpx2.Client` used by `invoke`.
         async_client: Optional asynchronous `httpx2.AsyncClient` used by `ainvoke`.
+        extra_headers: Optional mapping of custom HTTP headers to include with requests.
 
     Raises:
         ValueError: If credentials are unavailable or the timeout is not positive.
@@ -147,8 +150,17 @@ class TypeSafeClassifier(RunnableSerializable[ClassifierRequest, ClassifierRespo
         ```
     """
 
-    model: str = Field(default=_DEFAULT_MODEL, min_length=1)
+    model: str = Field(
+        default_factory=from_env("TYPESAFE_MODEL", default=_DEFAULT_MODEL),
+        min_length=1,
+    )
     """TypeSafe model name used for classification.
+
+    Resolution order:
+
+    1. Explicit `model` supplied to `TypeSafeClassifier`.
+    2. The `TYPESAFE_MODEL` environment variable.
+    3. `jev-latest`.
 
     The default, `jev-latest`, follows TypeSafe's latest compatible Jev release. Use a
     concrete model identifier when an application requires reproducible behavior across
@@ -242,6 +254,13 @@ class TypeSafeClassifier(RunnableSerializable[ClassifierRequest, ClassifierRespo
 
     This client is not used by `invoke` or `batch`. Configure `client` separately when
     synchronous calls also require custom HTTP behavior.
+    """
+
+    extra_headers: dict[str, str] | None = Field(default=None)
+    """Optional additional HTTP headers to include with every request.
+
+    Use `extra_headers` to supply custom proxy, tracing, or alternative
+    authentication headers.
     """
 
     model_config = ConfigDict(
@@ -452,12 +471,16 @@ class TypeSafeClassifier(RunnableSerializable[ClassifierRequest, ClassifierRespo
             self.api_key.get_secret_value()
             if isinstance(self.api_key, SecretStr)
             else self.api_key
-        )
-        return {
-            "Authorization": f"Bearer {api_key}",
+        ).strip()
+        auth = api_key if " " in api_key else f"Bearer {api_key}"
+        headers = {
+            "Authorization": auth,
             "Content-Type": "application/json",
             "User-Agent": f"langchain-typesafe/{__version__}",
         }
+        if self.extra_headers:
+            headers.update(self.extra_headers)
+        return headers
 
     def _payload(self, request: ClassifierRequest) -> dict[str, JsonValue]:
         return {

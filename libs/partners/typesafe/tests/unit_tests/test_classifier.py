@@ -767,3 +767,98 @@ def test_untraced_invocation_is_unaffected() -> None:
     client.close()
 
     assert result.usage.input_tokens == 42
+
+
+def test_model_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The classifier reads its default model from `TYPESAFE_MODEL`."""
+    monkeypatch.setenv("TYPESAFE_MODEL", "jev-custom-v1")
+    classifier = TypeSafeClassifier(api_key=API_KEY)
+    assert classifier.model == "jev-custom-v1"
+
+
+def test_explicit_model_overrides_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit `model` argument overrides `TYPESAFE_MODEL`."""
+    monkeypatch.setenv("TYPESAFE_MODEL", "jev-env-model")
+    classifier = TypeSafeClassifier(api_key=API_KEY, model="jev-explicit-model")
+    assert classifier.model == "jev-explicit-model"
+
+
+def test_custom_model_transmitted_in_payload() -> None:
+    """Custom model name is included inside the JSON request body."""
+    recorded_payload: dict[str, Any] = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        nonlocal recorded_payload
+        recorded_payload = json.loads(request.content)
+        return httpx2.Response(200, json=_response_payload())
+
+    client = httpx2.Client(transport=httpx2.MockTransport(handler))
+    classifier = TypeSafeClassifier(
+        api_key=API_KEY,
+        model="jev-2025-01-01",
+        client=client,
+    )
+    classifier.invoke(_request())
+
+    assert recorded_payload["model"] == "jev-2025-01-01"
+    client.close()
+
+
+@pytest.mark.parametrize(
+    ("raw_api_key", "expected_auth_header"),
+    [
+        ("simple_key", "Bearer simple_key"),
+        ("  simple_key  ", "Bearer simple_key"),
+        ("Bearer existing_token", "Bearer existing_token"),
+        ("ApiKey custom_scheme_key", "ApiKey custom_scheme_key"),
+        ("Basic dXNlcjpwYXNz", "Basic dXNlcjpwYXNz"),
+    ],
+)
+def test_authorization_header_supports_alternative_schemes(
+    raw_api_key: str,
+    expected_auth_header: str,
+) -> None:
+    """Authorization header supports default Bearer prefix or existing schemes."""
+    recorded_auth: str | None = None
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        nonlocal recorded_auth
+        recorded_auth = request.headers.get("authorization")
+        return httpx2.Response(200, json=_response_payload())
+
+    client = httpx2.Client(transport=httpx2.MockTransport(handler))
+    classifier = TypeSafeClassifier(
+        api_key=raw_api_key,
+        client=client,
+    )
+    classifier.invoke(_request())
+
+    assert recorded_auth == expected_auth_header
+    client.close()
+
+
+def test_extra_headers_are_transmitted() -> None:
+    """Custom extra_headers are included in HTTP requests."""
+    recorded_headers: httpx2.Headers | None = None
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        nonlocal recorded_headers
+        recorded_headers = request.headers
+        return httpx2.Response(200, json=_response_payload())
+
+    client = httpx2.Client(transport=httpx2.MockTransport(handler))
+    classifier = TypeSafeClassifier(
+        api_key=API_KEY,
+        extra_headers={
+            "X-Custom-Proxy": "proxy-123",
+            "X-Trace-Id": "trace-456",
+        },
+        client=client,
+    )
+    classifier.invoke(_request())
+
+    assert recorded_headers is not None
+    assert recorded_headers["x-custom-proxy"] == "proxy-123"
+    assert recorded_headers["x-trace-id"] == "trace-456"
+    assert recorded_headers["authorization"] == f"Bearer {API_KEY}"
+    client.close()
